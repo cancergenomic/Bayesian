@@ -1,0 +1,396 @@
+---
+title: "Alzheimer"
+output: html_document
+---
+
+```{r}
+### Alzheimer`s Disease Hierarchical Model
+## Part ONE ; The Non_Bayesian Data Analysis 
+# Read in the dataset 
+
+data <- read.csv("oasis_longitudinal.csv",
+                 header = TRUE)
+
+subject.ID <- data$Subject.ID 
+MRI.ID <- data$MRI.ID
+
+str(data)
+summary(data)
+
+
+# EDUC : Education Level 
+# SES : Socio_Economic Status 
+# MMSE : Mini Mental State Examination 
+# CDR : Clinical Dimentia Rating 
+# eTIV :estimated Total Intracranial Volume 
+# nWBV : Normalized Whole Brain Volume 
+# ASF : Atlas Scaling Factor
+
+
+####################################################################################
+```
+```{r}
+
+
+library(car)
+boxplot(nWBV ~ Age ,
+        data = data,
+        notch = FALSE,
+        varwidth = TRUE,
+        col = "skyblue")
+        
+scatterplot(nWBV ~ Age,
+            data = data,
+            xlab = "Age ( years) ",
+            ylab = "normalised Whole Brain Volume",
+            spread = FALSE,
+            pch = 16,
+            lty = 3)
+# Categorization of the Education Variable 
+
+table(data$EDUC)
+data$EDUC <- findInterval(data$EDUC,c(12,16,18,20,23))
+
+table(data$SES)
+summary(data$SES)
+data$SES <- findInterval(data$SES,
+                         c(1,2,3,4,5))
+
+# install nlme 
+library(nlme)
+
+groups <- table(data$Group)
+barplot(groups,
+        main = "Barplot for the Group Levels",
+        col = c("blue","grey","skyblue"))
+
+data_Group <- groupedData(nWBV ~ Age|Group,
+                          data = data)
+
+plot(data_Group)
+
+CDRs <- table(data$CDR)
+barplot(CDRs,
+        col = c("blue","skyblue","grey","red"))
+data_CDR <- groupedData(nWBV ~ Age|CDR,
+                        data = data)
+
+plot(data_CDR)
+
+MFs <- table(data$M.F)
+barplot(MFs,
+        col = c("yellow","green"))
+
+data_MF <- groupedData(nWBV ~ Age|M.F,
+                       data = data)
+
+plot(data_MF)
+
+EDUCs <- table(data$EDUC)
+barplot(EDUCs,
+        xlab = "years of Education",
+        ylab = "Frequency")
+
+data_EDUC <- groupedData(nWBV ~ Age|EDUC,
+                         data = data)
+plot(data_EDUC)
+
+SESs <- table(data$SES)
+barplot(SESs)
+
+data_SES <- groupedData(nWBV ~ Age|SES,
+                        data = data)
+plot(data_SES)
+```
+
+```{r}
+missing_total <- sum(is.na(data))
+missing_ses <- sum(is.na(data$SES))
+
+missing_mmse <- sum(is.na(data$MMSE))
+table(data$Group)
+
+data$Group <-factor(data$Group,
+                    levels = c("Converted","Demented","Nondemented"),
+                    labels = c(1,2,3))
+
+data$M.F <- ifelse(data$M.F == "M",1,-1)
+data$Hand <- ifelse(data$Hand =="R",1,-1)
+
+
+library(missForest)
+
+data <- missForest(data[c(-1,-2)],
+                   maxiter = 10,
+                   ntree = 30)
+
+data <-cbind(data$ximp, subject.ID)
+data <- cbind(data,MRI.ID)
+
+data <- data[,c(14,15,1,2,3,4,5,6,7,8,9,10,11,12,13)]
+attach(data)
+```
+```{r}
+data_stan_Model_A <- list(N = nrow(data),
+                          Age = data$Age,
+                          nWBV = data$nWBV)
+
+```
+```{r}
+install.packages("rstan", repos = "https://cloud.r-project.org/", dependencies = TRUE)
+library(rstan)
+```
+
+```{r}
+Model_A <- stan(file = "Model_A.stan",
+                data = data_stan_Model_A,
+                iter = 1000,
+                warmup = 500,
+                chains = 4)
+```
+```{r}
+
+writeLines(readLines("Model_A.stan"))
+# Quick check for the Model Convergence 
+traceplot(Model_A)
+print(Model_A) # The "Rhat" statistics for the Model Convergence 
+
+# Summary of the basic estimates & inferences 
+summary(Model_A)
+
+# Posterior Draws & Estimates 
+posterior_Model_A <- extract(Model_A)
+class(posterior_Model_A)
+
+# Extract the estimate for the parameter of the interests 
+mean(posterior_Model_A$beta[,2]) # The mean of the fixed slope as beta[2]
+
+mean(posterior_Model_A$beta[,1]) # The mean for the fixed intercept as beta[1]
+
+# To Visulize the uncertainty around the mean 
+plot(x = data$Age,
+     y = data$nWBV,
+     xlab = "Age ( years)",
+     ylab = " Brain Volume (cm^3) ",
+     main = " Brain Volume over time")
+
+beta_1 <- posterior_Model_A$beta[,1] # The Fixed Intercept 
+beta_2 <- posterior_Model_A$beta[,2] # The Fixed Slope 
+for ( i in 1:400){
+  abline(beta_1[i],beta_2[i],col = "blue")
+}
+
+# To check the final outcome 
+
+b_1_fixed <- mean(posterior_Model_A$beta[,1])
+b_1_fixed
+
+b_2_fixed <- mean(posterior_Model_A$beta[,2])
+b_2_fixed
+
+par(mfrow=c(1,1))
+boxplot(posterior_Model_A$beta,
+        col = "skyblue",
+        main = " Model A")
+
+library(bayesplot)
+Model_A
+mcmc_combo(Model_A)
+
+# Posterior Predict Check 
+nWBV_rep <- as.matrix(Model_A,
+                      pars = "nWBV_rep")
+ppc_dens_overlay(nWBV,nWBV_rep[1:10,])
+
+# Posterior Draws 
+posterior_Model_A<- extract(Model_A)
+
+
+Beta_eff <- apply(posterior_Model_A$beta,2,quantile, probs = c(0.025,0.5,0.975))
+Beta_eff
+
+df_Beta <- data.frame( ID =unique(data$subject.ID), 
+                        Group = "Age",
+                        LI = Beta_eff[1,],
+                        Median = Beta_eff[2,],
+                        HI = Beta_eff[3,])
+
+library(ggplot2)
+
+ggplot(df_Beta,
+       aes(x = ID, y = Median)) + geom_point() + 
+  geom_linerange(aes(ymin=LI,ymax=HI)) + facet_wrap( ~ Group,scales = "free") +
+  geom_hline(aes(yintercept = 0),color = "blue" , linetype= "dashed") + 
+  labs(y="Regression Parameters")
+```
+```{r}
+data$Group <- factor(data$Group)
+nlevels(data$Group)
+
+data_stan_Model_B <- list( N = nrow(data),
+                          G = nlevels(data$Group),
+                          Group = as.integer(data$Group),
+                          Age = data$Age,
+                          nWBV = data$nWBV)
+library(rstan)
+Model_B_III <- stan(file = "Model_B_III.stan",
+                    data = data_stan_Model_B,
+                    iter = 4000,
+                    chains = 4)
+```
+```{r}
+# Quick check for the Model Convergence 
+
+writeLines(readLines("Model_B_III.stan"))
+
+traceplot(Model_B_III)
+# Check the convergence by Rhat statistics 
+print(Model_B_III)
+
+
+# Posterior Draws 
+posterior_Model_B_III <- extract(Model_B_III)
+
+Group_eff <- apply(posterior_Model_B_III$u,2,quantile, probs = c(0.025,0.5,0.975))
+Group_eff
+
+
+df_Group <- data.frame( ID =unique(data$Group), 
+                        Group = "Group",
+                        LI = Group_eff[1,],
+                        Median = Group_eff[2,],
+                        HI = Group_eff[3,])
+
+library(ggplot2)
+ggplot(df_Group,
+       aes(x = ID, y = Median)) + geom_point() + 
+  geom_linerange(aes(ymin=LI,ymax=HI)) + facet_wrap( ~ Group,scales = "free") +
+  geom_hline(aes(yintercept = 0),color = "blue" , linetype= "dashed") + 
+  labs(y="Regression Parameters") 
+
+
+
+#####################################################################################
+# The Posterior Predictive Check 
+# bayesplot package required 
+nWBV_rep <- as.matrix(Model_B_III,
+                      pars = "nWBV_rep")
+dim(nWBV_rep)
+
+library(bayesplot)
+ppc_dens_overlay(nWBV,nWBV_rep[1:100,])
+# The changing intercept derivation 
+mean(posterior_Model_B_III$u[,1]) # The intercept for the "Converted" level 
+mean(posterior_Model_B_III$u[,2]) # The intercept for the "Demented" level 
+mean(posterior_Model_B_III$u[,3]) # The intercept for the "Nondemented" level 
+
+# The Fixed effects derivations 
+mean(posterior_Model_B_III$beta[,2]) # Estimated Fixed Slope 
+
+mean(posterior_Model_B_III$beta[,1]) # Estimated Fixed Intercept 
+
+
+
+par(mfrow=c(1,1))
+boxplot(posterior_Model_B_III$u,
+        col = "red")
+```
+```{r}
+# The Random Slope model for the Group as Demetic and Non_Dementic 
+
+Model_B_II <- stan(file = "Model_B_II.stan",
+                   data = data_stan_Model_B,
+                   iter = 8000,
+                   chains = 4)
+```
+```{r}
+
+writeLines(readLines("Model_B_II.stan"))
+traceplot(Model_B_II)
+print(Model_B_II)
+# Changing Slope Model B :
+
+# The quick check for the Model convergence 
+traceplot(Model_B_II)
+library(shinystan)
+
+
+# To extract the posterior 
+posterior_Model_B_II <- extract(Model_B_II)
+
+```
+```{r}
+data$CDR <- factor(data$CDR)
+nlevels(data$CDR)
+
+data_stan_Model_C <- list( N = nrow(data),
+                           G = nlevels(data$CDR),
+                           Group = as.integer(data$Group),
+                           C = nlevels(data$CDR),
+                           CDR = as.integer(data$CDR),
+                           Age = data$Age,
+                           nWBV = data$nWBV)
+```
+```{r}
+library(rstan)
+Model_C <- stan(file = "Model_C.stan",
+                data = data_stan_Model_C,
+                iter = 3000,
+                chains = 4)
+```
+```{r}
+# Quick check for the Model Convergence 
+
+writeLines(readLines("Model_C.stan"))
+
+traceplot(Model_C)
+print(Model_C)
+          
+# To extract the posterior 
+posterior_Model_C <- extract(Model_C)
+
+# To extract the parameters of the intersts : The changing slope of stages in AD
+
+u_2_1_Model_C <- mean(posterior_Model_C$u[,2,1]) # The slope of demantic with very mild dimentia 
+u_2_2_Model_C <- mean(posterior_Model_C$u[,2,2]) # The slope of the demantic with mild dimentia 
+u_2_3_Model_C <- mean(posterior_Model_C$u[,2,3]) # The slope of the demantic with Moderate dimentia 
+u_2_4_Model_C <- mean(posterior_Model_C$u[,2,4]) # The slope of the demantic with Severe Dementia 
+
+# To visulaize the parameter of interests 
+install.packages("lattice")
+library(lattice)
+
+x_Model_C <- c(u_2_1_Model_C,u_2_2_Model_C,u_2_3_Model_C,u_2_4_Model_C)
+x_Model_C_F <- data.frame(x_Model_C,1)
+stripplot(x_Model_C,
+          pch = 'O',
+          col = "red")
+
+# Posterior Draws 
+posterior_Model_C <- extract(Model_C)
+
+
+Group_eff <- apply(posterior_Model_C$u,2,quantile, probs = c(0.025,0.5,0.975))
+Group_eff
+
+CDR_eff <- apply(posterior_Model_C$w,2,quantile, probs = c(0.025,0.5,0.975))
+
+
+
+df_CDR <- data.frame( ID =unique(data$CDR), 
+                        Group = "CDR",
+                        LI = CDR_eff[1,],
+                        Median = CDR_eff[2,],
+                        HI = CDR_eff[3,])
+
+df_all <- rbind(df_Group,df_CDR)
+
+library(ggplot2)
+
+ggplot(df_all,
+       aes(x = ID, y = Median)) + geom_point() + 
+  geom_linerange(aes(ymin=LI,ymax=HI)) + facet_wrap( ~ Group,scales = "free") +
+  geom_hline(aes(yintercept = 0),color = "blue" , linetype= "dashed") + 
+  labs(y="Regression Parameters")
+
+```
