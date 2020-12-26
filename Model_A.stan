@@ -1,23 +1,22 @@
 data{
-  int<lower=1> N; // The number of the observations 
-  vector[N] Age; 
-  vector[N] nWBV;
+  int<lower=0> N; // The number of the observations 
+  vector[N] Y; // The response variable as the level of the microRNA expressed
+  vector<lower=0, upper=+1>[N] CANCER; // The predictor variable 
 }
-
 parameters{
-  
-  vector[2] beta; // beta[1]: Fixed Intercept & beta[2]: Fixed Slope 
-  real<lower=0> sigma_e;
+  real beta_1; // The beta[1]: Fixed intercept , beta[2] : Fixed Slope 
+  real beta_2; 
+  real<lower=0> sigma_e; // Standard Error 
 }
 
 model{
-  
-  nWBV ~ normal(beta[1] + beta[2] * Age,sigma_e);
+    // The likelihood 
+  Y ~ normal(beta_1 + CANCER * beta_2,sigma_e);
 }
 
 generated quantities{
-  real nWBV_rep[N];
-  for (n in 1:N){
-    nWBV_rep[n] = normal_rng(beta[1] + beta[2] *Age[n],sigma_e);
+  real Y_bar[N];
+  for ( i in 1:N){
+    Y_bar[i] = normal_rng(beta_1 + CANCER[i] * beta_2,sigma_e);
   }
 }
