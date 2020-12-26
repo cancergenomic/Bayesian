@@ -1,0 +1,269 @@
+---
+title: "microRNA"
+output: html_document
+---
+
+```{r}
+# The Fixed Effects Model of the microRNA in cancer research 
+# The Bayesian and Probabilistic Model Analysis 
+# STAN Language 
+
+library(rstan)
+library(bayesplot)
+library(nlme)
+library(shinystan)
+```
+```{r}
+data <- read.csv("microRNA_Ovarian_Cancer.csv",
+                 header = TRUE)
+
+# Missing data analysis 
+str(data)
+summary(data)
+
+missing_All <- sum(is.na(data))
+missing_CANCER<- sum(is.na(data$CANCER))
+missing_AGE <- sum(is.na(data$AGE..year))
+missing_BW <- sum(is.na(data$BW..kg))
+missing_Y <- sum(is.na(data$Y))
+
+
+# Missing value treatment of the "CANCER" 
+data <- data[!is.na(data$CANCER),]
+sum(is.na(data$CANCER))
+
+# imputation by " Predictive Mean Matching" 
+
+install.packages("missForest")
+library(missForest)
+
+data <- missForest(data,
+           maxiter = 10,
+           ntree = 50)
+data$OOBerror
+data <- data$ximp
+attach(data)
+sum(is.na(data))
+```
+```{r}
+# Categorization of the Education Variable 
+
+table(data$AGE..year)
+data$AGE..year <- findInterval(data$AGE..year,c(44,68,93))
+
+# Data Exploration 
+library(nlme)
+
+data_microRNA <- groupedData( Y ~ CANCER |MIRNAID,
+                              data = data)
+data_Age <- groupedData(Y ~ CANCER | AGE..year,
+                        data = data)
+data_Weight <- groupedData( Y ~ CANCER |BW..kg,
+                            data = data)
+
+plot(data_microRNA)
+plot(data_Age)
+range(data$AGE..year)
+```
+```{r}
+####################################################################################
+### The Fixed Effect Model 
+## The Bayesian Model 
+# The Non_Hiearchical Model 
+
+1# The data input , suitable for the STAN algorithms 
+data_stan_Model_A <- list(N = nrow(data), # The number of the observation 
+                  CANCER= data$CANCER, # The response variable 
+                  Y = data$Y)
+library(rstan)                  
+rstan_options(auto_write = TRUE)
+Model_A <- stan(file = "Model_A.stan",
+                data = data_stan_Model_A,
+                iter = 1000,
+                warmup = 500,
+                chains = 4)
+```
+```{r}
+# Quick check for the model convergence
+writeLines(readLines("Model_A.stan"))
+traceplot(Model_A)
+# Check model convergence by examining the Rhat 
+print(Model_A)
+
+# POsterior Draws 
+posterior_Model_A <- extract(Model_A)
+                  
+# Posterior Predict Check 
+Y_bar <- as.matrix(Model_A,
+                      pars = "Y_bar")
+
+ppc_dens_overlay(Y,Y_bar[1:300,])
+
+beta_2 <- mean(posterior_Model_A$beta_2)
+
+print(quantile(unlist(beta_2),
+         probs = c(0.025,0.5,0.975)))
+                  
+# Posterior Draws 
+posterior_Model_A<- extract(Model_A)
+
+
+Beta_eff <- apply(posterior_Model_A$beta_2,1,quantile, probs = c(0.025,0.5,0.975))
+Beta_eff
+
+df_Beta <- data.frame( ID =unique(data$MIRNAID), 
+                       Group = "MIRNAID",
+                       LI = Beta_eff[1,],
+                       Median = Beta_eff[2,],
+                       HI = Beta_eff[3,])
+
+library(ggplot2)
+
+ggplot(df_Beta,
+       aes(x = ID, y = Median)) + geom_point() + 
+  geom_linerange(aes(ymin=LI,ymax=HI)) + facet_wrap( ~ Group,scales = "free") +
+  geom_hline(aes(yintercept = 0),color = "blue" , linetype= "dashed") + 
+  labs(y="Regression Parameters")
+# Plotting the mcmc samples 
+
+beta_1 <- mean(posterior_Model_A$beta_1)
+beta_1
+beta_2 <- mean(posterior_Model_A$beta_2)
+beta_2
+```
+```{r}
+# Non_Bayesian 
+Model_A_Non_Bayesian <- glm(data$CANCER ~ .,
+                            data = data)
+
+summary(Model_A_Non_Bayesian)
+  
+cancer_grouped <-groupedData(Y ~ CANCER |MIRNAID,
+                             data = as.data.frame(data))
+
+plot(cancer_grouped,
+     display = "MIRNAID",
+     aspect = 2,
+     key = F)
+
+cancer_grouped_ID <-groupedData(Y ~ CANCER |ID,
+                                data = as.data.frame(data))  
+plot(cancer_grouped_ID,
+     display = "AGE..year")
+```
+```{r}
+#############################################################################
+#                                    # Part II.                             #
+#                          # Varying Intercept , fixed slope                #
+#############################################################################
+
+data$ID <- factor(data$ID)
+nlevels(data$ID)
+
+data$MIRNAID <- factor(data$MIRNAID)
+nlevels(data$MIRNAID)
+
+data$AGE..year <- factor(data$AGE..year)
+nlevels(data$AGE..year)
+
+data_stan_Model_B <- list( N = nrow(data), # number of the observation 
+                           Y = data$Y,
+                           CANCER = data$CANCER,
+                           R = nlevels(data$MIRNAID),
+                           MIRNAID = as.integer(data$MIRNAID))
+```
+```{r}
+                          
+                           
+Model_B <- stan(file = "Model_B.stan",
+                data = data_stan_Model_B,
+                iter = 2000,
+                chains = 4)
+```
+                
+```{r}
+writeLines(readLines("Model_B.stan"))
+traceplot(Model_B)
+launch_shinystan(Model_B)
+```
+```{r}
+print(Model_B)
+```
+```{r}
+# Posterior Draws 
+posterior_Model_B <- extract(Model_B)
+
+
+Beta_eff <- apply(posterior_Model_B$beta,2,quantile, probs = c(0.025,0.5,0.975))
+Beta_eff
+
+
+df_Group <- data.frame( ID =unique(data$MIRNAID), 
+                        Group = "MIRNAID",
+                        LI = Beta_eff[1,],
+                        Median = Beta_eff[2,],
+                        HI = Beta_eff[3,])
+
+library(ggplot2)
+ggplot(df_Group,
+       aes(x = ID, y = Median)) + geom_point() + 
+  geom_linerange(aes(ymin=LI,ymax=HI)) + facet_wrap( ~ Group,scales = "free") +
+  geom_hline(aes(yintercept = 0),color = "blue" , linetype= "dashed") + 
+  labs(y="Regression Parameters") 
+
+
+
+summary(Model_B)
+summary(data$ximp$DIS)
+
+posterior <- extract(Model_B,
+                     pars = "beta[2]")
+
+class(posterior)
+
+mean(unlist(posterior))
+
+```
+#############################################################################
+```{r}
+data_stan_Model_C <- list(N = nrow(data),
+                          R = nlevels(data$MIRNAID),
+                          MIRNAID = as.integer(data$MIRNAID),
+                          A = nlevels(data$AGE..year),
+                          AGE = as.integer(data$AGE..year),
+                          Y = data$Y,
+                          CANCER = data$CANCER)
+```
+```{r}
+library(rstan)
+Model_C <- stan(file = "Model_C.stan",
+                data = data_stan_Model_C,
+                iter = 4000,
+                chains = 3)
+```
+```{r}
+# Quick Check for the Model Convergence 
+traceplot(Model_C)
+print( Model_C) # Examine the Rhat for the Model Convergence 
+```
+
+# Posterior Draws 
+posterior_Model_C <- extract(Model_C)
+
+
+W_eff <- apply(posterior_Model_C$w,2,quantile, probs = c(0.025,0.5,0.975))
+
+
+
+df_Group <- data.frame( ID =unique(data$MIRNAID), 
+                        Group = "CANCER",
+                        LI = W_eff[1,],
+                        Median = W_eff[2,],
+                        HI = W_eff[3,])
+
+library(ggplot2)
+ggplot(df_Group,
+       aes(x = ID, y = Median)) + geom_point() + 
+  geom_linerange(aes(ymin=LI,ymax=HI)) + facet_wrap( ~ Group,scales = "free") +
+  geom_hline(aes(yintercept = 0),color = "blue" , linetype= "dashed") + 
+  labs(y="Regression Parameters") 
